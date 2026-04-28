@@ -1,0 +1,38 @@
+# --- Core ---
+python-dotenv>=1.0.1
+pydantic>=2.7
+pydantic-settings>=2.3
+loguru>=0.7.2
+tenacity>=8.4
+tqdm>=4.66
+orjson>=3.10
+
+# --- Async / HTTP ---
+httpx>=0.27
+aiolimiter>=1.1
+anyio>=4.4
+
+# --- Aliyun DashScope (百炼) ---
+dashscope>=1.20.0
+
+# --- Vector store ---
+qdrant-client>=1.10.1
+
+# --- Graph store ---
+neo4j>=5.22
+
+# --- Relational store ---
+psycopg[binary,pool]>=3.2
+sqlalchemy>=2.0.31
+
+# --- Web service ---
+fastapi>=0.111
+uvicorn[standard]>=0.30
+
+# --- Eval / NLP utilities ---
+numpy>=1.26
+scikit-learn>=1.5
+rank-bm25>=0.2.2
+
+# --- Optional dev ---
+ipython>=8.25
