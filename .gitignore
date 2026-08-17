@@ -33,17 +33,9 @@ wheels/
 .ruff_cache/
 
 # ============== Docker volumes（Postgres / Neo4j / Qdrant 持久化数据）==============
-data/postgres/
-data/neo4j/
-data/qdrant/
 
 # 流水线缓存（抽取的 jsonl + 评估明细 + 模型调用日志 + 个人工具输出）
 # 这些都是可以从 Professional.json 重新生成的中间产物
-data/cache/*.jsonl
-data/cache/*.log
-data/cache/*.log.*
-data/cache/eval_results.jsonl
-data/cache/*.tsv
 
 # 但保留 testset.jsonl 模板？默认排除，需要时手动 -f 提交
 # data/cache/testset.jsonl
