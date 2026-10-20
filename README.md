@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
-[![ModelScope](https://img.shields.io/badge/ModelScope-Data%20OpenSource-orange.svg)](https://www.modelscope.cn/)
+[![ModelScope](https://img.shields.io/badge/ModelScope-lzx1770670957%2Fmedical--graph--rag--qa-orange.svg)](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/summary)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue)](https://www.postgresql.org/)
 [![Neo4j](https://img.shields.io/badge/Neo4j-5.22%20APOC-blueviolet)](https://neo4j.com/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.11-red)](https://qdrant.tech/)
@@ -49,25 +49,27 @@
 
 ## 3. 数据集开源与获取（魔塔社区）
 
-为了促进中文医学大模型与检索增强技术（RAG / GraphRAG）社区的健康发展，本项目所采用的结构化医学问答数据集已完整开源至**魔塔社区 (ModelScope)**。
+为了促进中文医学大模型与检索增强技术（RAG / GraphRAG）社区的健康发展，本项目所采用的结构化医学问答数据集已完整开源至**魔塔社区 (ModelScope)**：
+👉 **数据集主页**：[lzx1770670957/medical-graph-rag-qa](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/summary)
 
 ### 3.1 数据集规格画像
 
 | 统计指标 | 规模数值 | 说明 |
 | :--- | :--- | :--- |
-| **总 Q&A 数量** | **30,031 条** | 经过深度清洗与结构化的专业临床医学问答 |
+| **总 Q&A 数量** | **30,031 条** | 经过深度清洗与结构化的专业临床医学问答 (`Professional.json`) |
 | **顶层专科覆盖** | **24 个** | 儿科(4168)、传染病(3763)、妇产科(2284)、心血管(2098)等 |
 | **独立临床子主题** | **2,533 个** | 每个主题具备高度专业聚焦性 |
 | **语义 Chunk 数量** | **6,092 个** | 每个 Chunk 承载 4~5 条强关联问答 |
-| **问题平均字数** | **24 字** | 贴近真实患者及全科医师临床提问习惯 |
-| **答案平均字数** | **267 字** | 最长 4,157 字，内容详尽严谨 |
+| **医学实体抽取** | **39,400 个** | 9 类去重医学实体与同义别名 (`entities.jsonl`) |
+| **临床拓扑关系** | **23,591 条** | 12 类临床拓扑关系三元组 (`relations.jsonl`) |
+| **评测基准盲测集** | **480 条** | 24 专科分层抽样基准测试集 (`testset.jsonl`) |
 
 ### 3.2 魔塔社区专属授权配置
 
-在拉取或同步魔塔社区数据时，可配置专用 API 访问凭据：
+在拉取或同步魔塔社区私有资源时，可配置专用 API 访问凭据（公开数据集亦可免 Token 直接下载）：
 
 ```bash
-# 环境变量配置
+# 环境变量配置（可从 ModelScope 个人中心 -> 访问令牌获取）
 export MODELSCOPE_API_TOKEN="your-modelscope-api-token"
 ```
 
@@ -84,35 +86,34 @@ $env:MODELSCOPE_API_TOKEN="your-modelscope-api-token"
 pip install modelscope
 ```
 
-运行以下 Python 脚本自动下载并放置到项目根目录下：
+运行以下 Python 脚本自动下载并提取数据文件至项目目录：
 
 ```python
 import os
 import shutil
-from modelscope.hub.api import HubApi
+from pathlib import Path
 from modelscope.hub.snapshot_download import snapshot_download
 
-# 1. 认证登录
-SDK_TOKEN = os.getenv("MODELSCOPE_API_TOKEN", "your-modelscope-api-token")
-os.environ["MODELSCOPE_API_TOKEN"] = SDK_TOKEN
-api = HubApi()
-api.login(SDK_TOKEN)
-
-# 2. 下载数据集仓库（若已知具体数据集 repo_id，可直接下载）
-# 示例：拉取数据集到本地目录并提取 Professional.json
+# 下载完整数据集仓库到本地缓存
 dataset_dir = snapshot_download(
-    dataset_id='ms_medical_graph_rag_qa',  # 魔塔数据集名称
+    dataset_id='lzx1770670957/medical-graph-rag-qa',
     cache_dir='./data/cache'
 )
 print(f"数据集已成功同步至: {dataset_dir}")
+
+# 将核心问答文件复制至根目录
+downloaded_prof = Path(dataset_dir) / "Professional.json"
+if downloaded_prof.exists():
+    shutil.copy2(downloaded_prof, "./Professional.json")
+    print("已就绪: ./Professional.json")
 ```
 
 #### 方式二：使用 Git LFS 直接克隆
 
 ```bash
 git lfs install
-git clone https://www.modelscope.cn/datasets/<dataset_name>.git data/raw
-cp data/raw/Professional.json ./Professional.json
+git clone https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa.git data/modelscope_raw
+cp data/modelscope_raw/Professional.json ./Professional.json
 ```
 
 ### 3.4 数据格式样例 (`Professional.json`)

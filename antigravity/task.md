@@ -1,4 +1,4 @@
-# 任务清单：Key 安全脱敏与魔塔数据上传
+# 任务清单：Key 安全脱敏与魔塔数据上传（已完成）
 
 - [x] 任务调研与规划 <!-- id: 0 -->
     - [x] 分析当前项目结构、已有 README 与技术方案细节 <!-- id: 1 -->
@@ -16,13 +16,14 @@
     - [x] 编写手把手快速开始指南（Docker 一键拉起、环境配置、流水线断点续跑） <!-- id: 13 -->
     - [x] 补充检索生成核心算法（三视角向量 + 图多跳 + RRF 融合 + 引用溯源） <!-- id: 14 -->
     - [x] 补充评测基准、API 文档、前端交互、工程调优踩坑与贡献指南 <!-- id: 15 -->
-- [/] Key 安全保护与历史清理 <!-- id: 30 -->
+- [x] Key 安全保护与历史清理 <!-- id: 30 -->
     - [x] 将 README 与工件中的真实 Key 替换为通用环境变量占位符 <!-- id: 31 -->
-    - [ ] 使用 commit --amend 覆写前次提交以清除 Git 历史中的敏感 Key <!-- id: 32 -->
-    - [ ] 强制推送到 GitHub 远程仓库 (origin & source) 覆盖泄露版本 <!-- id: 33 -->
-- [ ] 将 data 相关数据上传到魔塔社区 (ModelScope) <!-- id: 40 -->
-    - [ ] 安装 modelscope SDK <!-- id: 41 -->
-    - [ ] 使用用户 Token 认证登录并获取账号信息 <!-- id: 42 -->
-    - [ ] 整理需要上传的数据集（Professional.json 及提取产物） <!-- id: 43 -->
-    - [ ] 创建或上传至魔塔社区数据集仓库 <!-- id: 44 -->
-    - [ ] 更新 README 中的魔塔数据集真实链接 <!-- id: 45 -->
+    - [x] 使用 commit --amend 覆写前次提交以清除 Git 历史中的敏感 Key <!-- id: 32 -->
+    - [x] 强制推送到 GitHub 远程仓库 (origin & source) 覆盖泄露版本 <!-- id: 33 -->
+- [x] 将 data 相关数据上传到魔塔社区 (ModelScope) <!-- id: 40 -->
+    - [x] 安装 modelscope SDK <!-- id: 41 -->
+    - [x] 使用用户 Token 认证登录并获取账号信息 (`lzx1770670957`) <!-- id: 42 -->
+    - [x] 整理需要上传的数据集（`Professional.json`、`entities.jsonl`、`relations.jsonl`、`testset.jsonl`、`eval_results.jsonl` 及 Dataset Card） <!-- id: 43 -->
+    - [x] 创建公开数据集仓库 `lzx1770670957/medical-graph-rag-qa` 并完成批量上传 <!-- id: 44 -->
+    - [x] 更新 README 中的魔塔数据集真实链接与主页地址 <!-- id: 45 -->
+    - [x] 同步最新 README 至 GitHub 远端仓库 <!-- id: 46 -->
