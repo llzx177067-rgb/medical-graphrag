@@ -14,7 +14,7 @@
 
 **高精度 · 多视角混合召回 · 严密证据链溯源 · 生产级中文临床医学 GraphRAG 开源系统**
 
-[项目概览](#1-项目概览) • [核心亮点](#2-核心特性亮点) • [数据开源](#3-数据集开源与获取魔塔社区) • [⚡ 开箱即用(免向量化)](#4-极速开箱即用免重新向量化) • [系统架构](#5-系统架构全景) • [快速开始](#6-快速开始-quick-start) • [流水线编排](#7-离线全流程构建) • [检索算法](#8-检索与融合算法原理) • [评测复现](#9-评测基准与复现) • [API与前端](#10-api-接口与交互控制台) • [踩坑与优化](#11-工程实践与排错指南) • [贡献与声明](#12-免责声明与开源协议)
+[项目概览](#1-项目概览) • [核心亮点](#2-核心特性亮点) • [数据下载](#3-数据集开源与下载指引) • [数据使用指南](#4-数据使用方法与实战场景-data-usage-guide) • [系统架构](#5-系统架构全景) • [快速开始](#6-快速开始-quick-start) • [从零构建](#7-离线全流程构建从零构建) • [检索算法](#8-检索与融合算法原理) • [评测复现](#9-评测基准与复现) • [API与前端](#10-api-接口与交互控制台) • [踩坑与优化](#11-工程实践与排错指南) • [贡献与协议](#14-免责声明与开源协议)
 
 </div>
 
@@ -47,136 +47,238 @@
 
 ---
 
-## 3. 数据集开源与获取（魔塔社区）
+## 3. 数据集开源与下载指引
 
-为了促进中文医学大模型与检索增强技术（RAG / GraphRAG）社区的健康发展，本项目所采用的结构化医学问答数据集已完整开源至**魔塔社区 (ModelScope)**：
-👉 **数据集主页**：[lzx1770670957/medical-graph-rag-qa](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/summary)
+为了促进中文医学大模型与检索增强技术（RAG / GraphRAG）社区的健康发展，本项目所采用的结构化医学问答数据集及预构建数据库已完整开源至**魔塔社区 (ModelScope)**：
 
-### 3.1 数据集规格画像
+👉 **数据集仓库主页**：[lzx1770670957/medical-graph-rag-qa](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/summary)  
+📁 **文件列表直达**：[魔塔 Files 页面](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/files)
 
-| 统计指标 | 规模数值 | 说明 |
-| :--- | :--- | :--- |
-| **总 Q&A 数量** | **30,031 条** | 经过深度清洗与结构化的专业临床医学问答 (`Professional.json`) |
-| **顶层专科覆盖** | **24 个** | 儿科(4168)、传染病(3763)、妇产科(2284)、心血管(2098)等 |
-| **独立临床子主题** | **2,533 个** | 每个主题具备高度专业聚焦性 |
-| **语义 Chunk 数量** | **6,092 个** | 每个 Chunk 承载 4~5 条强关联问答 |
-| **医学实体抽取** | **39,400 个** | 9 类去重医学实体与同义别名 (`entities.jsonl`) |
-| **临床拓扑关系** | **23,591 条** | 12 类临床拓扑关系三元组 (`relations.jsonl`) |
-| **评测基准盲测集** | **480 条** | 24 专科分层抽样基准测试集 (`testset.jsonl`) |
+### 3.1 数据工件清单与规格画像
 
-### 3.2 魔塔社区专属授权配置
+魔塔社区仓库包含以下两类数据工件，支持按需获取：
 
-在拉取或同步魔塔社区私有资源时，可配置专用 API 访问凭据（公开数据集亦可免 Token 直接下载）：
+| 文件名称 | 类型 | 体积规格 | 核心用途与内容 |
+| :--- | :--- | :--- | :--- |
+| **`qdrant_storage.tar.gz`** | 预构建向量库 | 612 MB (解压约 954MB) | **已完成 2560 维高维向量嵌入的 Qdrant 数据库**，含 `medgraph_q`、`medgraph_a`、`medgraph_topic` 全部 62,595 个向量索引，解压直接挂载即可，免除 6 万次 Embedding 调用！ |
+| **`neo4j_data.tar.gz`** | 预构建图数据库 | 65 MB (解压约 624MB) | **已构建完成的 Neo4j 知识图谱**，含 78,080 个实体/骨架节点与 235,909 条临床拓扑关系边。 |
+| **`postgres_data.tar.gz`** | 预构建关系库 | 101 MB (解压约 300MB) | **已入库的 PostgreSQL 数据卷**，含科室、主题、分块、问答对、实体和关系的完整表结构。 |
+| **`Professional.json`** | 原始问答文本 | 27.2 MB | 30,031 条带三层层级标签（Specialty-Topic-Part）的标准临床问答对。 |
+| **`entities.jsonl`** | 实体抽取结果 | 25.4 MB | 抽取的 39,400 个去重医学实体（含 9 类医学实体、别名数组与描述）。 |
+| **`relations.jsonl`** | 关系抽取结果 | 10.9 MB | 抽取的 23,591 条类型化临床关系三元组（含支持证据 chunkId 及置信度）。 |
+| **`testset.jsonl`** | 盲测基准集 | 491 KB | 覆盖 24 个临床专科的分层抽样盲测评估测试集（共 480 条）。 |
+| **`eval_results.jsonl`** | 评测详细得分 | 36 KB | 包含 Recall@8 与 MRR@8 的各项细粒度评估指标明细。 |
+
+### 3.2 访问凭证配置（可选）
+
+公开数据集支持免登录直接下载。如需在自动化流水线中配置魔塔社区访问凭证：
 
 ```bash
-# 环境变量配置（可从 ModelScope 个人中心 -> 访问令牌获取）
+# Linux / macOS
 export MODELSCOPE_API_TOKEN="your-modelscope-api-token"
-```
 
-在 Windows PowerShell 下执行：
-```powershell
+# Windows PowerShell
 $env:MODELSCOPE_API_TOKEN="your-modelscope-api-token"
 ```
 
-### 3.3 数据下载方式
+### 3.3 数据下载方式（4 种渠道）
 
-#### 方式一：使用 ModelScope Python SDK（推荐）
-
+#### 渠道 1：一键全自动下载并部署预构建库（推荐，最省心）
+项目内置了跨平台一键拉取脚本，自动下载 `qdrant_storage.tar.gz`、`neo4j_data.tar.gz`、`postgres_data.tar.gz` 并自动解压部署至 `./data/` 目录：
 ```bash
 pip install modelscope
+python scripts/restore_prebuilt_data.py
 ```
 
-运行以下 Python 脚本自动下载并提取数据文件至项目目录：
+#### 渠道 2：使用 ModelScope CLI 命令行下载
+```bash
+pip install modelscope
 
+# 下载完整数据集仓库至本地目录
+modelscope download --dataset lzx1770670957/medical-graph-rag-qa --local_dir ./data/modelscope_dataset
+```
+
+#### 渠道 3：使用 ModelScope Python SDK 精准拉取
 ```python
-import os
-import shutil
 from pathlib import Path
+import shutil
 from modelscope.hub.snapshot_download import snapshot_download
 
-# 下载完整数据集仓库到本地缓存
+# 1. 下载完整数据集
 dataset_dir = snapshot_download(
     dataset_id='lzx1770670957/medical-graph-rag-qa',
     cache_dir='./data/cache'
 )
-print(f"数据集已成功同步至: {dataset_dir}")
+print(f"数据已同步至本地: {dataset_dir}")
 
-# 将核心问答文件复制至根目录
-downloaded_prof = Path(dataset_dir) / "Professional.json"
-if downloaded_prof.exists():
-    shutil.copy2(downloaded_prof, "./Professional.json")
-    print("已就绪: ./Professional.json")
+# 2. 按需提取核心文件到项目根目录（例如 Professional.json）
+prof_src = Path(dataset_dir) / "Professional.json"
+if prof_src.exists():
+    shutil.copy2(prof_src, "./Professional.json")
+    print("Professional.json 已复制到项目根目录")
 ```
 
-#### 方式二：使用 Git LFS 直接克隆
-
+#### 渠道 4：使用 Git LFS 直接克隆
 ```bash
 git lfs install
 git clone https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa.git data/modelscope_raw
-cp data/modelscope_raw/Professional.json ./Professional.json
-```
-
-### 3.4 数据格式样例 (`Professional.json`)
-
-数据集每一项均包含完整的三层标签定位与临床问答内容：
-
-```json
-[
-  {
-    "question": "什么是受体在细胞中的主要功能？",
-    "answer": "受体在细胞中的主要功能是参与和介导化学信号的传递。这些受体位于细胞表面膜上或细胞质内，它们通过与特定的配体结合，直接或间接地调控细胞的生化过程...",
-    "chunkId": "临床药理学 - 药物-受体相互作用 - part-1"
-  },
-  {
-    "question": "配体如何影响受体的活性？",
-    "answer": "配体对受体的活性的影响主要体现在两个方面：1. 配体可以激活受体或使受体失活... 2. 配体还可以影响药物与受体的结合...",
-    "chunkId": "临床药理学 - 药物-受体相互作用 - part-1"
-  }
-]
 ```
 
 ---
 
-## 4. 极速开箱即用（免重新向量化）
+## 4. 数据使用方法与实战场景 (Data Usage Guide)
 
-> [!TIP]
-> **开源福利**：重新运行向量化流水线需要调用阿里百炼 **60,062 次 Embedding API**（耗时约 28 分钟并消耗大量 Token）。
-> 本项目已将**全量已完成 2560 维嵌入的 Qdrant 向量库、Neo4j 知识图谱以及 PostgreSQL 数据库**预构建数据包同步开源至魔塔社区！
-> 
-> 您**无需重新进行昂贵耗时的数据向量化与图构建**，直接下载预构建包解压，即可拥有完整可用的 GraphRAG 系统！
+下载数据后，您可以根据具体的使用需求选择以下任一使用方案：
 
-### ⚡ 3 步极速启动
+### 场景一：极速开箱即用（免重新向量化，直接运行 GraphRAG）
+> **适合人群**：希望立刻体验或部署医疗知识问答系统的工程师与研究人员。
 
-#### 步骤 1：一键拉取并恢复预构建全量数据库
-项目内置了跨平台一键恢复脚本，将自动从魔塔社区下载 `qdrant_storage.tar.gz`（612MB，含三大向量集合全部 62,595 个向量）、`neo4j_data.tar.gz`（65MB，含 7.8 万节点与 23.5 万条边）与 `postgres_data.tar.gz`（101MB）并自动解压到 `data/` 目录：
+1. **解压预构建数据包**（若使用了 `python scripts/restore_prebuilt_data.py` 则已自动完成）：
+   ```bash
+   tar -xzf qdrant_storage.tar.gz -C ./data/
+   tar -xzf neo4j_data.tar.gz -C ./data/
+   tar -xzf postgres_data.tar.gz -C ./data/
+   ```
+2. **启动基础存储容器**：
+   ```bash
+   docker compose up -d
+   ```
+3. **配置百炼 Key 并启动问答服务**：
+   在 `.env` 中填入您的阿里云百炼 `API_KEY`（**仅用于在线问答时的意图重写、重排与生成，0 向量化调用开销**），然后启动应用：
+   ```bash
+   uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+   ```
+   打开浏览器访问 **http://127.0.0.1:8000** 即可直接体验！
+
+---
+
+### 场景二：Python 代码中加载与分析数据集（科研与学术挖掘）
+> **适合人群**：从事自然语言处理、医学信息抽取与文本挖掘的研究者。
+
+#### 1. 加载并解析问答对三层结构 (`Professional.json`)
+```python
+import json
+
+with open("Professional.json", "r", encoding="utf-8") as f:
+    qa_data = json.load(f)
+
+print(f"共加载 {len(qa_data)} 条问答数据")
+
+# 解析单条数据及其层级标签
+item = qa_data[0]
+print("问题:", item["question"])
+print("回答摘要:", item["answer"][:80], "...")
+
+# 解析 chunkId 层次：[科室] - [子主题] - part-[序号]
+parts = [p.strip() for p in item["chunkId"].split("-")]
+specialty = parts[0]
+topic = "-".join(parts[1:-1]).strip() if len(parts) > 2 else parts[1]
+print(f"所属科室: {specialty} | 临床子主题: {topic} | 分块标识: {item['chunkId']}")
+```
+
+#### 2. 使用 Pandas 进行 24 专科分布统计
+```python
+import json
+import pandas as pd
+
+with open("Professional.json", "r", encoding="utf-8") as f:
+    qa_data = json.load(f)
+
+df = pd.DataFrame(qa_data)
+# 提取科室名称
+df["specialty"] = df["chunkId"].apply(lambda x: x.split("-")[0].strip())
+
+# 统计各科室 QA 分布 Top 5
+print("各科室问答数量 Top 5:")
+print(df["specialty"].value_counts().head(5))
+```
+
+#### 3. 读取实体与关系知识图谱 (`entities.jsonl` & `relations.jsonl`)
+```python
+import json
+
+# 读取实体列表
+entities = []
+with open("data/cache/entities.jsonl", "r", encoding="utf-8") as f:
+    for line in f:
+        if line.strip():
+            entities.append(json.loads(line))
+print(f"医学实体总量: {len(entities)} (首条实体: {entities[0]})")
+
+# 读取临床关系三元组
+relations = []
+with open("data/cache/relations.jsonl", "r", encoding="utf-8") as f:
+    for line in f:
+        if line.strip():
+            relations.append(json.loads(line))
+print(f"临床关系三元组总量: {len(relations)} (示例三元组: {relations[0]})")
+```
+
+---
+
+### 场景三：在 Python 代码中直接调用检索与生成引擎 (SDK 模式)
+> **适合人群**：希望将 GraphRAG 检索能力集成到自身后端系统或评测脚本的开发者。
+
+```python
+import asyncio
+from src.retrieval.pipeline import RetrievalPipeline
+from src.generation.answer import AnswerGenerator
+
+async def main():
+    # 1. 初始化检索器与生成器
+    pipeline = RetrievalPipeline()
+    generator = AnswerGenerator()
+
+    # 2. 输入临床咨询问题
+    query = "妊娠期发现血糖偏高，应采取哪些干预措施？"
+    
+    # 3. 执行多通道并行检索与 Cross-Encoder 重排
+    retrieve_result = await pipeline.retrieve(query, top_k=8)
+    print(f"命中候选 QA 数量: {len(retrieve_result.items)}")
+    print(f"关联临床三元组数量: {len(retrieve_result.triples)}")
+
+    # 4. 生成带 [chunkId] 证据链回溯引用的医学回答
+    answer = await generator.generate(query, retrieve_result)
+    print("\n=== 模型生成答复 ===")
+    print(answer)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+### 场景四：从零执行离线知识抽取流水线（完全复现与二次定制）
+> **适合人群**：希望使用自己的医学数据集或微调抽取 Prompt 的进阶开发者。
+
+当准备好自己的原始问答文件并命名为 `Professional.json` 后，可依次执行编号流水线脚本：
 
 ```bash
-# 安装魔塔 SDK（若未安装）
-pip install modelscope
+# 1. 结构化解析入库 PostgreSQL
+python scripts/01_load_data.py
 
-# 执行一键恢复预构建向量与图数据库
-python scripts/restore_prebuilt_data.py
+# 2. 密集向量化入库 Qdrant（支持双视角）
+python scripts/02_build_vectors.py --view both
+
+# 3. 构建 Neo4j 拓扑骨架 (Specialty -> Topic -> Chunk -> QAPair)
+python scripts/03_build_graph_skeleton.py
+
+# 4. LLM 并行抽取医学实体（支持断点续跑）
+python scripts/04_extract_entities.py
+
+# 5. 实体别名对齐与同义词去重
+python scripts/09_dedup_entities.py
+
+# 6. LLM 抽取 12 类临床关系并注入 Neo4j 图谱
+python scripts/05_extract_relations.py --push-graph
+
+# 7. 生成专科子主题语义摘要并同步 Topic 向量
+python scripts/06_build_topic_summaries.py --concurrency 8
+
+# 8. 抽样测试集并运行基准评测
+python scripts/07_build_testset.py --per-specialty 20
+python scripts/08_evaluate.py --top-k 8 --parallelism 32
 ```
-
-*(或者您也可以直接访问 [魔塔数据集文件列表](https://www.modelscope.cn/datasets/lzx1770670957/medical-graph-rag-qa/files) 手动下载上述 3 个 `.tar.gz` 文件并解压至 `./data/` 目录)*
-
-#### 步骤 2：一键拉起基础设施容器
-```bash
-docker compose up -d
-```
-> 解压后的数据卷将直接被 Qdrant、Neo4j 与 Postgres 挂载识别，直接就绪！
-
-#### 步骤 3：配置 API Key 并启动服务
-在 `.env` 中填入您的阿里云百炼 `API_KEY`（**仅用于在线问答时的提问理解改写、重排与生成，0 向量化开销**）：
-```ini
-API_KEY=sk-your-dashscope-api-key
-```
-
-启动 FastAPI 服务：
-```bash
-uvicorn src.api.server:app --host 0.0.0.0 --port 8000 --reload
-```
-打开浏览器访问 **http://127.0.0.1:8000**，即可立即体验医疗知识图谱检索增强问答！
 
 ---
 
