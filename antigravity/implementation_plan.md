@@ -1,33 +1,36 @@
-# 实施计划：基于默沙东医疗问答 Graph RAG 系统 README 深度优化与数据上传
+# 实施计划：开箱即用（免重新向量化）全量数据开源方案
 
-## 1. 任务背景与目标
-针对本项目进行开源级 README 深度重构优化并上传数据至魔塔社区：
-- **项目标题**：统一命名为《基于默沙东医疗问答 Graph RAG 系统》。
-- **开源标准**：遵循国际顶级开源项目的规范，包含精美徽章栏、架构可视化流程、详细技术栈、保姆级上手指南、算法细节、API 文档、评测指标、排错指南与免责声明。
-- **数据开源与魔塔社区**：重点突出数据集开源至魔塔社区（ModelScope），提供配置指南，使用占位符保护私密凭证。
-- **凭证安全规范**：严禁在公开代码与文档中暴露用户的真实 API Key/Token。
-- **数据上传魔塔**：利用用户配置的魔塔社区凭证，将医疗问答数据（Professional.json 及相关提取数据）上传同步至魔塔社区数据集仓库。
-- **语言与规范**：遵循全中文交互、中文思考过程以及中文注释和文档规范。
+## 1. 现状评估
+1. **此前已上传魔塔社区的数据**：
+   - `Professional.json` (30,031 条原始问答文本)
+   - `entities.jsonl` (39,400 个抽取的医学实体)
+   - `relations.jsonl` (23,591 条临床关系三元组)
+   - `testset.jsonl` (480 条评测盲测集)
+   - `eval_results.jsonl` (评测结果)
+   - **结论**：当前魔塔仓库仅包含**文本和抽取产物**，**尚未包含已 Embedding 的向量数据（Qdrant 索引库文件）以及图数据库数据（Neo4j/Postgres 实例文件）**。
 
-## 2. README 章节架构设计
+2. **如果只下载当前数据**：
+   使用者需要重新运行：
+   - `01_load_data.py` (数据入库 PG)
+   - `02_build_vectors.py` (向阿里百炼发起 60,062 次 Embedding 请求，生成 Qdrant 向量，耗时约 28 分钟并消耗大量 API 配额)
+   - `03_build_graph_skeleton.py` (Neo4j 骨架)
+   - `05_extract_relations.py` (Neo4j 关系推图)
+   - `06_build_topic_summaries.py` (生成子主题摘要与 Topic 向量)
 
-```mermaid
-flowchart TD
-    Header["标题 & 规范徽章 & 快速导航"] --> Overview["1. 项目概览 & 核心解决痛点"]
-    Overview --> Features["2. 核心特性亮点 (Key Features)"]
-    Features --> DataOpenSource["3. 数据开源与获取 (魔塔社区 ModelScope)"]
-    DataOpenSource --> Architecture["4. 系统架构与工作流全景图"]
-    Architecture --> TechStack["5. 技术选型与数据 Schema"]
-    TechStack --> QuickStart["6. 快速开始 (Quick Start 步骤指南)"]
-    QuickStart --> Algorithm["7. 检索生成核心机制与算法原理"]
-    Algorithm --> Benchmark["8. 评测基准与复现 (Benchmark)"]
-    Benchmark --> APIDoc["9. RESTful API 接口与交互前端"]
-    APIDoc --> FAQ["10. 工程实践与常见问题排查 (FAQ)"]
-    FAQ --> Roadmap["11. 路线图、贡献指南与免责声明"]
+## 2. “开箱即用·免重新向量化”的解决方案
+为了让使用者“下载数据，配置好 DashScope API Key 后直接就能用，0 消耗 API 配额重新做向量化与图抽取”，需要将底层引擎的预构建数据持久化包上传至魔塔社区：
+
+### 打包规格
+- **`qdrant_storage.tar.gz`**（由 `data/qdrant` 压缩而来，包含 `medgraph_q`、`medgraph_a`、`medgraph_topic` 3 个集合，原始大小约 954MB，压缩后预计约 400-500MB）；
+- **`neo4j_data.tar.gz`**（由 `data/neo4j` 压缩而来，包含 7.8 万节点与 23.5 万条边，原始大小约 624MB，压缩后预计约 100-150MB）；
+- **`postgres_data.tar.gz`**（由 `data/postgres` 压缩而来，包含全量表结构与数据，原始大小约 300MB，压缩后预计约 40MB）。
+
+### 使用者体验
+下载后执行一键解压脚本：
+```bash
+tar -xzf qdrant_storage.tar.gz -C ./data/
+tar -xzf neo4j_data.tar.gz -C ./data/
+tar -xzf postgres_data.tar.gz -C ./data/
+docker compose up -d
 ```
-
-## 3. 执行步骤
-1. 完成 README 与任务文档的敏感 Key 彻底脱敏。
-2. 使用 `git commit --amend` 覆盖前次提交，并强制推送到 GitHub 远端消除泄露历史。
-3. 安装配置 `modelscope` SDK，使用用户 Token 连接并上传 data 相关数据至魔塔社区数据集。
-4. 校验魔塔数据集并更新文档中的仓库引用。
+在 `.env` 中填入自己的百炼 `API_KEY`（仅用于在线提问时的意图理解、重排和生成），直接启动 `uvicorn src.api.server:app` 即可秒级开启医疗 GraphRAG 问答服务，完全无需重新向量化！

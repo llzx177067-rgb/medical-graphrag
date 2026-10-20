@@ -1,29 +1,19 @@
-# 任务清单：Key 安全脱敏与魔塔数据上传（已完成）
+# 任务清单：全量向量与图数据预构建包打包上传与开箱即用集成（已完成）
 
 - [x] 任务调研与规划 <!-- id: 0 -->
     - [x] 分析当前项目结构、已有 README 与技术方案细节 <!-- id: 1 -->
     - [x] 规划面向开源社区的高标准 README 结构体系 <!-- id: 2 -->
     - [x] 创建任务清单与实施方案工件 <!-- id: 3 -->
 - [x] 编写实施方案 (implementation_plan.md) <!-- id: 4 -->
-    - [x] 详细梳理各章节内容结构及魔塔社区数据集接入方案 <!-- id: 5 -->
-    - [x] 同步到当前目录下的 antigravity 文件夹 <!-- id: 6 -->
 - [x] 深度优化并生成 README.md <!-- id: 7 -->
-    - [x] 设定规范标题：`# 基于默沙东医疗问答 Graph RAG 系统` <!-- id: 8 -->
-    - [x] 添加开源规范徽章（License、Python、FastAPI、Neo4j、Qdrant、ModelScope 等） <!-- id: 9 -->
-    - [x] 完善项目概述与核心特性亮点 <!-- id: 10 -->
-    - [x] 编写魔塔社区（ModelScope）数据开源与下载接入章节 <!-- id: 11 -->
-    - [x] 丰富系统架构与技术选型（全流程流程图 + 数据流动） <!-- id: 12 -->
-    - [x] 编写手把手快速开始指南（Docker 一键拉起、环境配置、流水线断点续跑） <!-- id: 13 -->
-    - [x] 补充检索生成核心算法（三视角向量 + 图多跳 + RRF 融合 + 引用溯源） <!-- id: 14 -->
-    - [x] 补充评测基准、API 文档、前端交互、工程调优踩坑与贡献指南 <!-- id: 15 -->
 - [x] Key 安全保护与历史清理 <!-- id: 30 -->
-    - [x] 将 README 与工件中的真实 Key 替换为通用环境变量占位符 <!-- id: 31 -->
-    - [x] 使用 commit --amend 覆写前次提交以清除 Git 历史中的敏感 Key <!-- id: 32 -->
-    - [x] 强制推送到 GitHub 远程仓库 (origin & source) 覆盖泄露版本 <!-- id: 33 -->
-- [x] 将 data 相关数据上传到魔塔社区 (ModelScope) <!-- id: 40 -->
-    - [x] 安装 modelscope SDK <!-- id: 41 -->
-    - [x] 使用用户 Token 认证登录并获取账号信息 (`lzx1770670957`) <!-- id: 42 -->
-    - [x] 整理需要上传的数据集（`Professional.json`、`entities.jsonl`、`relations.jsonl`、`testset.jsonl`、`eval_results.jsonl` 及 Dataset Card） <!-- id: 43 -->
-    - [x] 创建公开数据集仓库 `lzx1770670957/medical-graph-rag-qa` 并完成批量上传 <!-- id: 44 -->
-    - [x] 更新 README 中的魔塔数据集真实链接与主页地址 <!-- id: 45 -->
-    - [x] 同步最新 README 至 GitHub 远端仓库 <!-- id: 46 -->
+- [x] 第一阶段数据上传魔塔 (原始QA+抽取实体/关系 JSON/JSONL) <!-- id: 40 -->
+- [x] 全量预构建数据打包与魔塔上传 <!-- id: 60 -->
+    - [x] 压缩打包 Qdrant 向量库 (`data/qdrant` -> `qdrant_storage.tar.gz` 612MB，含全部 62,595 个 2560 维已嵌入向量) <!-- id: 61 -->
+    - [x] 压缩打包 Neo4j 图数据库 (`data/neo4j` -> `neo4j_data.tar.gz` 65MB，含 7.8 万节点与 23.5 万条关系边) <!-- id: 62 -->
+    - [x] 压缩打包 Postgres 数据库 (`data/postgres` -> `postgres_data.tar.gz` 101MB) <!-- id: 63 -->
+    - [x] 成功上传 3 个预构建数据包至魔塔社区数据集仓库 `lzx1770670957/medical-graph-rag-qa` <!-- id: 64 -->
+- [x] 项目集成与开箱即用支持 <!-- id: 70 -->
+    - [x] 编写一键自动解压缩与部署脚本 `scripts/restore_prebuilt_data.py` <!-- id: 71 -->
+    - [x] 在项目 README.md 中新增“极速开箱即用（免重新向量化）”章节 <!-- id: 72 -->
+    - [x] 提交并同步至 GitHub 远程仓库 (origin & source) <!-- id: 73 -->
