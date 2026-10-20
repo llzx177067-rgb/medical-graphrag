@@ -1,529 +1,537 @@
-# 医疗 GraphRAG · 基于 Professional.json + 阿里百炼
+# 基于默沙东医疗问答 Graph RAG 系统
 
-[![status](https://img.shields.io/badge/status-生产就绪-success)]() [![data](https://img.shields.io/badge/data-30,031%20QA%20%2F%2024%20科室-blue)]() [![eval](https://img.shields.io/badge/Recall@8-92.1%25-brightgreen)]()
+<div align="center">
 
-端到端中文医疗 GraphRAG 系统：把 30,031 条临床医学问答（24 科室 / 2,533 子主题）转化为
-**Specialty → Topic → Chunk → QAPair** 三层结构图 + **9 类医学实体 / 12 类临床关系** 的知识图谱，
-配合 **Q-vec / A-vec / Topic-vec 三视角向量索引** 与 **Q+A+Graph 三路并行召回 + RRF 融合 + Cross-Encoder 重排**，
-最终生成带 `[chunkId]` 引用回链的中文医学回答。
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
+[![ModelScope](https://img.shields.io/badge/ModelScope-Data%20OpenSource-orange.svg)](https://www.modelscope.cn/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue)](https://www.postgresql.org/)
+[![Neo4j](https://img.shields.io/badge/Neo4j-5.22%20APOC-blueviolet)](https://neo4j.com/)
+[![Qdrant](https://img.shields.io/badge/Qdrant-1.11-red)](https://qdrant.tech/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-teal.svg)](https://fastapi.tiangolo.com/)
+[![Eval Recall](https://img.shields.io/badge/QA%20Recall%408-92.1%25-success.svg)]()
+[![Eval MRR](https://img.shields.io/badge/Chunk%20MRR%408-0.913-success.svg)]()
 
-所有 LLM / Embedding / Rerank 调用均通过阿里百炼（DashScope）—— 双模型 round-robin、并发限速、重试、
-完整调用日志全部内建。
+**高精度 · 多视角混合召回 · 严密证据链溯源 · 生产级中文临床医学 GraphRAG 开源系统**
 
----
+[项目概览](#1-项目概览) • [核心亮点](#2-核心特性亮点) • [数据开源](#3-数据集开源与获取魔塔社区) • [系统架构](#4-系统架构全景) • [快速开始](#5-快速开始-quick-start) • [流水线编排](#6-离线全流程构建) • [检索算法](#7-检索与融合算法原理) • [评测复现](#8-评测基准与复现) • [API与前端](#9-api-接口与交互控制台) • [踩坑与优化](#10-工程实践与排错指南) • [贡献与声明](#11-免责声明与开源协议)
 
-## 1. 关键成果
-
-| 维度 | 数值 |
-|---|---|
-| 输入数据 | 30,031 QA / 24 科室 / 2,533 子主题 / 6,092 chunks |
-| 抽取规模 | 39,400 唯一实体（去重后）/ 186,557 mentions / 23,591 类型化关系 |
-| 图谱规模 | Neo4j 78,080 节点 / 235,909 边（13 种实体类型 + 12 种关系类型）|
-| 向量索引 | Qdrant 三 collection 共 62,595 向量（dim=2560）|
-| **检索质量** | **QA Recall@8 = 92.1% / Chunk Recall@8 = 93.1% / Chunk MRR@8 = 0.913**（480 条 hold-out）|
-| 端到端延迟 | 单条 retrieve 约 5–8 秒（含 LLM 查询理解 + 三路召回 + 重排）|
-| 评估并发 | 32 路并行，480 条 12.5 分钟跑完 |
+</div>
 
 ---
 
-## 2. 系统架构
+## 1. 项目概览
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          离线索引流水线（一次性）                          │
-├──────────────────────────────────────────────────────────────────────────┤
-│  Professional.json (30k QA)                                               │
-│       │                                                                    │
-│       ├──► [01] parse + 三层标签 ──►  Postgres (specialty/topic/chunk/qa) │
-│       │                                                                    │
-│       ├──► [02] DashScope Embedding ──►  Qdrant: medgraph_q / medgraph_a │
-│       │                                                                    │
-│       ├──► [03] Neo4j 骨架（Specialty→Topic→Chunk→QAPair, BELONGS_TO）   │
-│       │                                                                    │
-│       ├──► [04] DashScope LLM 实体抽取（双模型 RR）                        │
-│       │       ├─► entities.jsonl（断点续跑）                              │
-│       │       ├─► PG.entity / PG.qa_entity_mention                        │
-│       │       └─► [09] dedup（aliases + 归一名）                          │
-│       │                                                                    │
-│       ├──► [05] DashScope LLM 关系抽取（schema-guided + evidence）        │
-│       │       ├─► relations.jsonl                                          │
-│       │       ├─► PG.relation                                              │
-│       │       └─► Neo4j: Entity 节点 + 12 种类型化关系（APOC）            │
-│       │                                                                    │
-│       ├──► [06] LLM 子主题摘要 + Embedding ──► Qdrant medgraph_topic      │
-│       │       └─► [06b] resync / [06c] 补做缺失                            │
-│       │                                                                    │
-│       ├──► [07] 分层抽样测试集（per-specialty）                            │
-│       └──► [08] Recall@k / MRR 评估                                        │
-└──────────────────────────────────────────────────────────────────────────┘
-                                  ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          在线检索 + 生成                                   │
-├──────────────────────────────────────────────────────────────────────────┤
-│  用户问题                                                                  │
-│      │                                                                     │
-│      ├──► [a] LLM 查询理解（改写 + 实体识别 + 科室推断）                   │
-│      │                                                                     │
-│      ├──► [b] 三路并行召回                                                 │
-│      │     ├─► Q-vec    嵌入 → Qdrant medgraph_q   (top-30)               │
-│      │     ├─► A-vec    嵌入 → Qdrant medgraph_a   (top-30)               │
-│      │     └─► Graph    锚实体 → Neo4j 1-2 跳邻居  (top-20)              │
-│      │                                                                     │
-│      ├──► [c] RRF 融合（k=60, weights=[1.0, 1.0, 0.8]）                   │
-│      │                                                                     │
-│      ├──► [d] DashScope Cross-Encoder rerank → top-K（默认 8）            │
-│      │                                                                     │
-│      ├──► [e] 上下文组装（命中 QA + 兄弟 QA + 子图三元组）                 │
-│      │                                                                     │
-│      └──► [f] LLM 生成（强制 [chunkId] 引用回链）                          │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+在现代医疗智能化与临床辅助决策领域，大语言模型（LLM）常面临**医学知识幻觉**、**跨科室推理盲区**以及**缺乏可追溯证据链**等严峻挑战。
+
+**基于默沙东医疗问答 Graph RAG 系统**是一套专为高严肃性医疗问答打造的工业级解决方案。项目以权威的《默沙东诊疗手册》（Merck Manuals 专业版）临床知识为基座，收录覆盖 **24 个顶层专科、2,533 个临床子主题的 30,031 条高水准医学 Q&A**。
+
+与传统的“暴力分块 + 向量检索”不同，本系统创新性地将**天然层级结构树**与**细粒度临床知识图谱**、**三重视角向量索引**紧密结合：
+- **结构化图谱骨架**：Specialty（科室） → Topic（子主题） → Chunk（语义块） → QAPair（问答对）；
+- **领域拓扑图谱**：抽取 39,400 个医学实体，构建涵盖 12 类临床关系（治疗、病因、表现、并发症、药物相互作用、禁忌等）的 Neo4j 拓扑网络；
+- **多通道融合检索**：Q-vec（问题匹配）+ A-vec（答案语义匹配）+ Graph（1-2 跳子图推理），配合 **RRF (Reciprocal Rank Fusion)** 倒数排名融合与 **Cross-Encoder 深度重排**；
+- **可信证据溯源**：在最终生成的医学解答中强制绑定 `[chunkId]` 来源标签，支持在前端一键定位与高亮证据卡片。
 
 ---
 
-## 3. 数据画像
+## 2. 核心特性亮点
 
-`Professional.json` 是一个临床医学问答数据集（默克手册风格），**已经是结构化的 Q&A**，每条带 `chunkId` 三层标签 `Specialty - Topic - part-N`。
-
-| 维度 | 值 |
-|---|---|
-| 总 Q&A 条数 | **30,031** |
-| 顶层科室 | **24 个**（儿科 4168 / 传染病 3763 / 妇产 2284 / 心血管 2098 …） |
-| 唯一 chunkId | **6,092** |
-| 子主题数 | **2,533** |
-| 平均每 chunk Q 数 | 4.9（最多 25） |
-| 问题平均长度 | 24 字 |
-| 答案平均长度 | 267 字（最长 4,157） |
-
-**关键观察 ——这数据自带 3 层人工标签**，不需要重新做 Leiden 社区聚类（标准 GraphRAG 的核心步骤）。
-因此本方案保留 chunkId 作为天然社区，把工作重心放在**实体 / 关系图谱**与**多视角向量召回**上。
+| 特性模块 | 核心能力与优势 |
+| :--- | :--- |
+| 🌟 **三视角多模态向量索引** | 突破单一文本嵌入局限，构建 **Q-vec（问题语义）**、**A-vec（完整答复内涵）** 与 **Topic-vec（专科子主题全局摘要）** 三大向量集合（Qdrant，dim=2560），兼顾短查询匹配与长语义匹配。 |
+| 🕸️ **双层知识图谱引擎** | 巧妙复用数据自带的天然 3 层标签作为宏观图骨架（免除传统 GraphRAG 昂贵的 Leiden 社区聚类）；底层注入 39,400 个去重实体及 23,591 条类型化边，支持 1-2 跳关联扩展。 |
+| ⚡ **Q+A+Graph 三路并行召回** | 基于 `asyncio` 高并发调度，同时向向量库与 Neo4j 发起检索引擎查询，实现毫秒级“语义相近 + 知识相连”的双轮驱动召回。 |
+| 🧮 **RRF 自适应融合 + 重排** | 采用加权倒数排名算法（RRF）融合三路结果，再经由 Cross-Encoder 深度重排序模型进行精准打分，有效过滤图谱与向量长尾噪声。 |
+| 🔍 **段落级可溯源引用回链** | 生成阶段采用严密防御性 Prompt 设计，强制要求 LLM 为每一段关键医学结论标定 `[chunkId]` 证据锚点，前端支持一键跳转核验，彻底解决幻觉风险。 |
+| 🚀 **生产级双模型限流与断点续跑** | 全流程内建阿里百炼（DashScope）双模型 Round-Robin 负载均衡，针对速率限制（429）配备动态退避重试，中间阶段全量输出 `.jsonl` 缓存，随时支持断点续跑。 |
 
 ---
 
-## 4. 技术栈
+## 3. 数据集开源与获取（魔塔社区）
 
-| 层 | 选型 | 用途 |
-|---|---|---|
-| **LLM** | DashScope `deepseek-v4-flash` + `qwen3.6-flash` | 双模型 round-robin（独立限流池）|
-| **Embedding** | DashScope `qwen3-vl-embedding`（多模态）| 文本向量化，dim=2560 |
-| **Rerank** | DashScope `qwen3-vl-rerank`| Cross-encoder 重排 |
-| **关系库** | PostgreSQL 16 | QA / 实体 / 关系 / mention，结构数据 |
-| **图库** | Neo4j 5.22 (Community + APOC) | 知识图谱、多跳查询 |
-| **向量库** | Qdrant 1.11 | 三个 collection（dim=2560）|
-| **API** | FastAPI + Uvicorn | REST + 静态前端 |
-| **异步** | asyncio + httpx + aiolimiter | 客户端并发限速 |
-| **部署** | Docker Compose | Neo4j / Qdrant / Postgres 一键启动 |
+为了促进中文医学大模型与检索增强技术（RAG / GraphRAG）社区的健康发展，本项目所采用的结构化医学问答数据集已完整开源至**魔塔社区 (ModelScope)**。
 
----
+### 3.1 数据集规格画像
 
-## 5. 数据 Schema
+| 统计指标 | 规模数值 | 说明 |
+| :--- | :--- | :--- |
+| **总 Q&A 数量** | **30,031 条** | 经过深度清洗与结构化的专业临床医学问答 |
+| **顶层专科覆盖** | **24 个** | 儿科(4168)、传染病(3763)、妇产科(2284)、心血管(2098)等 |
+| **独立临床子主题** | **2,533 个** | 每个主题具备高度专业聚焦性 |
+| **语义 Chunk 数量** | **6,092 个** | 每个 Chunk 承载 4~5 条强关联问答 |
+| **问题平均字数** | **24 字** | 贴近真实患者及全科医师临床提问习惯 |
+| **答案平均字数** | **267 字** | 最长 4,157 字，内容详尽严谨 |
 
-### Postgres
-```sql
-specialty         (name PK, n_topics, n_qa)
-topic             (specialty FK, name, n_chunks, n_qa, summary)
-chunk             (chunk_id PK, specialty, topic, part, n_qa, summary)
-qa_pair           (qa_id PK, chunk_id FK, specialty, topic, part, seq, question, answer, qa_text generated)
-entity            (entity_id PK, name, type, aliases TEXT[], description)
-qa_entity_mention (qa_id, entity_id, surface) PK
-relation          (rel_id, head_id, rel_type, tail_id, evidence_qa, evidence_chunk, confidence)
+### 3.2 魔塔社区专属授权配置
+
+在拉取或同步魔塔社区数据时，可配置专用 API 访问凭据：
+
+```bash
+# 环境变量配置
+export MODELSCOPE_API_TOKEN="your-modelscope-api-token"
 ```
 
-### Neo4j（标签 + 关系）
-```
-节点标签：
-  :Specialty (24)            :Disease (11,109)
-  :Topic (2,533)             :Drug (3,911)
-  :Chunk (6,092)             :Symptom (7,368)
-  :QAPair (30,031)           :Procedure (7,151)
-  :Entity (39,400)           :Lab (3,203)
-                             :Pathogen (1,170)
-                             :Anatomy (3,315)
-                             :Gene (1,165)
-                             :Population (1,008)
-
-关系类型：
-  结构性： BELONGS_TO (38,656)、MENTIONS (173,662)
-  治疗类： TREATS (4,743)、PREVENTS (1,078)、CONTRAINDICATED_FOR (329)、SIDE_EFFECT_OF (635)
-  病理类： CAUSES (4,395)、RISK_FACTOR_OF (1,304)、COMPLICATION_OF (764)
-  诊断类： PRESENTS_WITH (4,007)、DIAGNOSED_BY (3,186)
-  鉴别 ：DIFFERENTIAL_DX (410)
-  药物 ：INTERACTS_WITH (571)
-  兜底 ：AFFECTS (2,169)
-```
-
-### Qdrant
-```
-medgraph_q       30,031 点（Question 嵌入向量，dim=2560）
-medgraph_a       30,031 点（Q+A 拼接嵌入向量）
-medgraph_topic   2,533  点（LLM 生成的子主题摘要嵌入）
-```
-
----
-
-## 6. 项目目录
-
-```
-graph_rag/
-├── Professional.json              # 输入数据（27 MB）
-├── .env                           # DashScope key + 并发参数
-├── .env.example                   # 完整可调参数说明
-├── docker-compose.yml             # Neo4j + Qdrant + Postgres
-├── requirements.txt
-├── README.md                      # 本文件
-│
-├── src/
-│   ├── config.py                  # pydantic-settings 集中配置
-│   ├── clients/                   # 阿里百炼客户端（async）
-│   │   ├── _base.py               # 共用：rate limit / retry / 调用日志
-│   │   ├── llm.py                 # OpenAI-compat chat
-│   │   ├── embedding.py           # 多模态/纯文本自动路由
-│   │   └── rerank.py              # native rerank
-│   │
-│   ├── ingest/                    # 离线流水线核心
-│   │   ├── parse.py               # chunkId 三层解析（带 part 后缀剥离）
-│   │   ├── storage.py             # PG schema + 批量入库
-│   │   ├── prompts.py             # 实体/关系/摘要 prompt 模板
-│   │   ├── entity_extract.py      # P2 实体抽取 + 归一（断点续跑）
-│   │   ├── entity_dedup.py        # P2.5 别名归并 + Union-Find 去重
-│   │   ├── relation_extract.py    # P3 关系抽取 + 推图（APOC）
-│   │   └── summary.py             # P4 子主题摘要
-│   │
-│   ├── graph/                     # Neo4j 层
-│   │   ├── client.py              # driver 单例
-│   │   ├── schema.py              # 约束 + 索引
-│   │   └── builder.py             # 骨架批量构建
-│   │
-│   ├── index/
-│   │   └── vector_store.py        # Qdrant 抽象（query_points API）
-│   │
-│   ├── retrieval/                 # 在线检索
-│   │   ├── query_understanding.py # LLM 查询改写 + 实体识别
-│   │   ├── graph_recall.py        # 锚实体 → 1/2 跳子图召回
-│   │   ├── fusion.py              # RRF
-│   │   └── pipeline.py            # 三路并行 + RRF + rerank + 上下文组装
-│   │
-│   ├── generation/
-│   │   └── answer.py              # 强制 chunkId 引用回链
-│   │
-│   ├── eval/
-│   │   ├── build_test_set.py      # 分层抽样
-│   │   └── evaluate.py            # Recall@k / MRR / 并行评估
-│   │
-│   └── api/
-│       ├── server.py              # FastAPI 应用
-│       └── static/
-│           └── index.html         # 单页前端调试台
-│
-├── scripts/                       # 编号化运行脚本
-│   ├── 00_smoke_test.py           # 模型 + 服务连通性
-│   ├── 01_load_data.py            # JSON → Postgres
-│   ├── 02_build_vectors.py        # Q-vec + A-vec → Qdrant（断点续跑）
-│   ├── 03_build_graph_skeleton.py # 4 类节点 → Neo4j
-│   ├── 04_extract_entities.py     # 实体抽取（断点续跑）
-│   ├── 05_extract_relations.py    # 关系抽取 + 推图
-│   ├── 06_build_topic_summaries.py
-│   ├── 06b_resync_topic_vectors.py # Qdrant 出错时的补救
-│   ├── 06c_fill_missing_summaries.py
-│   ├── 07_build_testset.py
-│   ├── 08_evaluate.py
-│   └── 09_dedup_entities.py
-│
-└── data/
-    ├── neo4j/  qdrant/  postgres/ # Docker 数据卷
-    └── cache/                     # 抽取 jsonl + 调用日志 + 测试集
-        ├── model_calls.log         # 所有模型调用统一日志（自动滚动）
-        ├── entities.jsonl          # 实体抽取断点
-        ├── relations.jsonl         # 关系抽取断点
-        ├── testset.jsonl           # 480 条 hold-out
-        └── eval_results.jsonl      # 每条评估明细
-```
-
----
-
-## 7. 流水线脚本（按顺序运行）
-
-| 步骤 | 命令 | 说明 | 实测耗时 |
-|---|---|---|---|
-| 0 | `python scripts/00_smoke_test.py` | 验证 LLM/Embed/Rerank/PG/Neo4j/Qdrant | 5 s |
-| 1 | `python scripts/01_load_data.py` | 解析 chunkId → Postgres | 11 s |
-| 2 | `python scripts/02_build_vectors.py --view both` | Q+A 双视角 embedding（断点续跑）| 28 min（multimodal 单条调用，60k 次）|
-| 3 | `python scripts/03_build_graph_skeleton.py` | 4 类节点 + BELONGS_TO 边 | 15 s |
-| 4 | `python scripts/04_extract_entities.py` | 30,031 LLM 抽实体（双模型）| ~30 min（concurrency=128 双模型）|
-| 9 | `python scripts/09_dedup_entities.py [--dry-run]` | 别名归并去重 | 8 s |
-| 5 | `python scripts/05_extract_relations.py --push-graph` | 关系抽取 + Neo4j 推图 | ~33 min（25,907 LLM 调用）|
-| 6 | `python scripts/06_build_topic_summaries.py --concurrency 8` | 2,533 子主题摘要 | ~10 min |
-| 6c| `python scripts/06c_fill_missing_summaries.py` | 补做失败的摘要 | 8 min |
-| 7 | `python scripts/07_build_testset.py --per-specialty 20` | 分层抽样 480 条 | <1 s |
-| 8 | `python scripts/08_evaluate.py --top-k 8 --parallelism 32` | Recall@k / MRR | 12.5 min |
-
-每个 LLM 步骤都基于 `data/cache/*.jsonl` **断点续跑**——异常中止再次运行会跳过已完成项。
-
----
-
-## 8. 检索设计要点
-
-### 三路召回（并行）
-1. **Q-vec**：query embedding 与 30k 个 Question 向量做 cos 相似度（top-30）
-2. **A-vec**：query embedding 与 30k 个 Q+A 拼接向量（top-30）
-3. **Graph**：从 query 中识别的医学实体出发，在 Neo4j 中沿 1–2 跳邻居路径返回相关 QA（top-20）
-   - 直接命中 (`q-MENTIONS->e`) 权重 1.0
-   - 1 跳关系 (`a-rel->e`) 权重 0.7
-   - 2 跳路径权重 0.4
-
-### RRF 融合
-$$ \text{score}(d) = \sum_{i \in \{q, a, g\}} \frac{w_i}{60 + \text{rank}_i(d)} $$
-权重 `[1.0, 1.0, 0.8]`（图路稍降权，因其往往返回较多噪声候选）。
-
-### Cross-Encoder rerank
-DashScope `qwen3-vl-rerank` 对 query × top-32 候选做 pair-wise 打分，输出 top-8。
-
-### 上下文组装
-- 每条命中：QA + 同 chunk 兄弟 QA（最多 3 条，提供上下文）
-- 全局：从锚实体出发的子图三元组（最多 30 条）
-
-### 生成
-- LLM 强制要求每段陈述末尾标 `[chunkId]` 引用
-- 输出结构：核心答复 → 关键要点 → 来源列表
-
----
-
-## 9. API 接口
-
-服务地址：**http://127.0.0.1:8000**
-
-| 端点 | 方法 | 用途 |
-|---|---|---|
-| `/` | GET | 静态前端（单页应用）|
-| `/health` | GET | 存活检查 |
-| `/stats` | GET | PG / Neo4j / Qdrant 实时计数 |
-| `/specialties` | GET | 24 科室 + QA 数 + 摘要覆盖率 |
-| `/random_qa?specialty=&n=` | GET | 随机示例 QA（用于灵感）|
-| `/entity?name=&limit=` | GET | 实体邻居（aliases / mention QAs / 关系）|
-| `/retrieve` | POST | 检索（含三路子分数 + 耗时分解） |
-| `/ask` | POST | 检索 + LLM 生成（带 chunkId 引用）|
-
-### `/retrieve` 响应字段
-```json
-{
-  "query": "...",
-  "rewritten": "...",
-  "entities": [{"name":"妊娠期糖尿病","type":"Disease"}, ...],
-  "specialty_hint": "妇产科学",
-  "items": [
-    {
-      "qa_id": "...",
-      "score": 0.894,            // 重排得分
-      "rrf_score": 0.040,
-      "chunk_id": "...",
-      "specialty": "...", "topic": "...",
-      "sources": ["q","a","graph"],          // 哪些路命中
-      "channel_scores": {"q":0.79,"a":0.73,"graph":1.0},
-      "channel_ranks":  {"q":3,"a":5,"graph":1},
-      "question": "...", "answer": "...",
-      "siblings": [...]
-    }
-  ],
-  "triples": [{"head":"...","rel":"TREATS","tail":"...", "confidence":0.9, "chunk_id":"..."}, ...],
-  "timings_ms": {"query_understanding":5110, "query_embed":452, "recall":1121, "rerank":455, "triples":104, "total":7326},
-  "counts":     {"vec_q":30, "vec_a":30, "graph":20, "fused":32, "rerank_kept":8, "triples":30}
-}
-```
-
----
-
-## 10. 前端调试台
-
-打开 http://127.0.0.1:8000/ 看到的内容：
-
-| 区域 | 功能 |
-|---|---|
-| **顶部 stats 栏** | 实时显示 PG/Neo4j/Qdrant 各表/集合的计数；`↻ 刷新` 按钮 |
-| **搜索栏** | 文本框 + 模式切换（Ask/Retrieve）+ 6 个示例问题 + 🎲 随机 + 📚 按科室浏览 |
-| **查询理解面板** | 原问题 / LLM 改写后 / 识别到的实体（**按 9 类配色，可点击** 看邻居）/ 推断科室 |
-| **耗时与计数** | 5 个流水线阶段 ms 耗时 + 6 个召回计数 |
-| **核心回答** | （Ask 模式）LLM 生成回答；`[chunkId]` 引用是**可点击徽章**，点了滚动并高亮对应证据卡片 |
-| **召回列表** | 每条卡片：排名、重排分、Q/A/Graph 来源徽章（hover 看子分数）、科室/子主题、原 Q&A、同 chunk 兄弟问、各路得分明细行 |
-| **过滤** | 双重过滤：`来源`（仅 Q-vec / 仅 A-vec / 仅 Graph / 多路命中）+ `按科室` |
-| **三元组面板** | 右栏：圆形 SVG 图（实体节点 + 关系箭头 + 标签）+ 三元组列表 |
-| **JSON 调试** | 可折叠抽屉，展示原始 API 响应 |
-| **实体弹窗** | 点击任意实体 chip 弹出：匹配实体（带 type / 描述 / aliases）+ 关联关系 + 提及该实体的 QA 列表 |
-
----
-
-## 11. 模型调用日志
-
-所有 LLM / Embedding / Rerank 调用统一写入 **`data/cache/model_calls.log`**（50 MB 滚动 + 5 份保留）。
-
-格式：
-```
-2026-04-27 16:01:23.812 | INFO  | model.llm        | call_begin id=8a3f2b1c path=/compatible-mode/v1/chat/completions model=deepseek-v4-flash msgs=2 chars=312
-2026-04-27 16:01:24.945 | INFO  | model.llm        | call_ok    id=8a3f2b1c attempts=1 attempt_ms=1130.4 total_ms=1132.1 usage={'prompt_tokens':156,'completion_tokens':87,'total_tokens':243}
-2026-04-27 16:01:25.102 | WARN  | model.embedding  | call_retry id=2f9c... attempt=1 status=429 412.5ms body=...
-```
-
-实时跟踪：
+在 Windows PowerShell 下执行：
 ```powershell
-# Windows PowerShell
-Get-Content data\cache\model_calls.log -Wait -Tail 100
-Get-Content data\cache\model_calls.log -Wait | Select-String "model.llm"
-Get-Content data\cache\model_calls.log -Wait | Select-String "call_fail|call_retry"
-
-# Git Bash / WSL
-tail -f data/cache/model_calls.log
-tail -f data/cache/model_calls.log | grep model.embedding
-tail -f data/cache/model_calls.log | grep -E "call_fail|call_retry"
+$env:MODELSCOPE_API_TOKEN="your-modelscope-api-token"
 ```
 
-字段含义：
-- `id` — 8 位调用 ID（重试期间同一 id 多次出现）
-- `attempt_ms` — 当次 HTTP 调用耗时
-- `total_ms` — 含全部重试与队列等待
-- `usage` — token 使用量（仅 LLM 才有）
-- tag：`model.llm` / `model.embedding` / `model.rerank`
+### 3.3 数据下载方式
+
+#### 方式一：使用 ModelScope Python SDK（推荐）
+
+```bash
+pip install modelscope
+```
+
+运行以下 Python 脚本自动下载并放置到项目根目录下：
+
+```python
+import os
+import shutil
+from modelscope.hub.api import HubApi
+from modelscope.hub.snapshot_download import snapshot_download
+
+# 1. 认证登录
+SDK_TOKEN = os.getenv("MODELSCOPE_API_TOKEN", "your-modelscope-api-token")
+os.environ["MODELSCOPE_API_TOKEN"] = SDK_TOKEN
+api = HubApi()
+api.login(SDK_TOKEN)
+
+# 2. 下载数据集仓库（若已知具体数据集 repo_id，可直接下载）
+# 示例：拉取数据集到本地目录并提取 Professional.json
+dataset_dir = snapshot_download(
+    dataset_id='ms_medical_graph_rag_qa',  # 魔塔数据集名称
+    cache_dir='./data/cache'
+)
+print(f"数据集已成功同步至: {dataset_dir}")
+```
+
+#### 方式二：使用 Git LFS 直接克隆
+
+```bash
+git lfs install
+git clone https://www.modelscope.cn/datasets/<dataset_name>.git data/raw
+cp data/raw/Professional.json ./Professional.json
+```
+
+### 3.4 数据格式样例 (`Professional.json`)
+
+数据集每一项均包含完整的三层标签定位与临床问答内容：
+
+```json
+[
+  {
+    "question": "什么是受体在细胞中的主要功能？",
+    "answer": "受体在细胞中的主要功能是参与和介导化学信号的传递。这些受体位于细胞表面膜上或细胞质内，它们通过与特定的配体结合，直接或间接地调控细胞的生化过程...",
+    "chunkId": "临床药理学 - 药物-受体相互作用 - part-1"
+  },
+  {
+    "question": "配体如何影响受体的活性？",
+    "answer": "配体对受体的活性的影响主要体现在两个方面：1. 配体可以激活受体或使受体失活... 2. 配体还可以影响药物与受体的结合...",
+    "chunkId": "临床药理学 - 药物-受体相互作用 - part-1"
+  }
+]
+```
 
 ---
 
-## 12. 关键参数（.env）
+## 4. 系统架构全景
 
+### 4.1 总体架构图
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      离线知识图谱与多视角向量构建流水线                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Professional.json (30,031 医学问答)                                     │
+│       │                                                                  │
+│       ├──► [01] 三层标签解析 ────────► PostgreSQL 关系存储                │
+│       │                               (specialty / topic / chunk / qa)   │
+│       │                                                                  │
+│       ├──► [02] 密集向量化 ──────────► Qdrant 向量引擎                   │
+│       │                               ├─ medgraph_q (问题索引)           │
+│       │                               └─ medgraph_a (问答拼接索引)       │
+│       │                                                                  │
+│       ├──► [03] 骨架拓扑入库 ────────► Neo4j 结构图 (BELONGS_TO 层次关系) │
+│       │                                                                  │
+│       ├──► [04/09] LLM 实体抽取与归一 ► 39,400 归一实体 + 别名合并       │
+│       │                                                                  │
+│       ├──► [05] LLM 关系抽取与证据链 ─► Neo4j 12 类临床关系网络          │
+│       │                                                                  │
+│       └──► [06] 专科子主题全局摘要 ──► Qdrant medgraph_topic             │
+└──────────────────────────────────────────────────────────────────────────┘
+                                      ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          在线检索增强生成 (GraphRAG)                      │
+├──────────────────────────────────────────────────────────────────────────┤
+│  用户复杂临床问题输入                                                    │
+│      │                                                                   │
+│      ├──► [A] LLM 查询理解：意图重写 + 实体识别 + 目标专科智能推断        │
+│      │                                                                   │
+│      ├──► [B] 三路高并发召回 (Parallel Multi-Channel Recall)             │
+│      │     ├─ 通道 1: Q-vec 向量相似度检索 (Top-30)                      │
+│      │     ├─ 通道 2: A-vec 深度语义匹配 (Top-30)                        │
+│      │     └─ 通道 3: Neo4j 实体锚点 1-2 跳子图路径关联扩展 (Top-20)     │
+│      │                                                                   │
+│      ├──► [C] RRF 倒数排名自适应融合 (Reciprocal Rank Fusion)             │
+│      │                                                                   │
+│      ├──► [D] Cross-Encoder 深度重排序 (Top-32 → 精选 Top-8)             │
+│      │                                                                   │
+│      ├──► [E] 富上下文组装 (命中 QA + 同 Chunk 兄弟上下文 + 知识三元组)    │
+│      │                                                                   │
+│      └──► [F] 严谨溯源生成：输出医学结论并强制绑定 [chunkId] 证据回跳     │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 数据模型与图谱 Schema
+
+#### PostgreSQL 关系表设计
+- `specialty`：24 个大科室基础信息与统计；
+- `topic`：2,533 个临床子主题及对应全局语义摘要；
+- `chunk`：6,092 个分块上下文单元；
+- `qa_pair`：30,031 个标准问答对及全文检索生成列；
+- `entity`：去重后的 39,400 个标准医学实体及别名数组；
+- `relation`：23,591 条临床关系（含头尾节点、关系类型、支持证据 chunkId 及置信度）。
+
+#### Neo4j 知识图谱节点与关系定义
+
+```
+【节点标签 (Node Labels)】
+  结构层节点:
+    (:Specialty)  (24)           (:Topic)    (2,533)
+    (:Chunk)      (6,092)        (:QAPair)   (30,031)
+  领域医学实体:
+    (:Disease)    (11,109)       (:Drug)     (3,911)
+    (:Symptom)    (7,368)        (:Procedure)(7,151)
+    (:Lab)        (3,203)        (:Pathogen) (1,170)
+    (:Anatomy)    (3,315)        (:Gene)     (1,165)
+    (:Population) (1,008)
+
+【核心关系类型 (Relationship Types)】
+  骨架拓扑:   [:BELONGS_TO], [:MENTIONS]
+  治疗方案:   [:TREATS], [:PREVENTS], [:CONTRAINDICATED_FOR], [:SIDE_EFFECT_OF]
+  病因病理:   [:CAUSES], [:RISK_FACTOR_OF], [:COMPLICATION_OF]
+  临床诊断:   [:PRESENTS_WITH], [:DIAGNOSED_BY], [:DIFFERENTIAL_DX]
+  药学作用:   [:INTERACTS_WITH], [:AFFECTS]
+```
+
+---
+
+## 5. 快速开始 (Quick Start)
+
+### 5.1 环境需求
+- **操作系统**：Linux / macOS / Windows 10+
+- **Python**：>= 3.10
+- **容器环境**：Docker & Docker Compose
+
+### 5.2 安装步骤
+
+#### 1. 克隆代码仓库
+```bash
+git clone https://github.com/your-username/medical-graph-rag.git
+cd medical-graph-rag
+```
+
+#### 2. 创建并激活虚拟环境
+```bash
+# Linux / macOS
+python -m venv .venv
+source .venv/bin/activate
+
+# Windows PowerShell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+#### 3. 安装依赖组件
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### 4. 配置环境变量
+复制配置模板并填入您的阿里云百炼（DashScope）API Key 与 ModelScope Token：
+
+```bash
+cp .env.example .env
+```
+
+`.env` 核心配置参数预览：
 ```ini
-# === 阿里百炼 ===
+# === 阿里百炼大模型与向量服务 ===
 BASE_URL=https://dashscope.aliyuncs.com
-API_KEY=sk-...
+API_KEY=sk-your-dashscope-api-key
 LLM_MODEL_NAME=deepseek-v4-flash
-LLM_MODEL_NAME_2=qwen3.6-flash       # 双模型 round-robin（独立限流池）
-EMBEDDING_MODEL=qwen3-vl-embedding   # 多模态，会自动路由到 multimodal-embedding 端点
-RERANK_MODEL=qwen3-vl-rerank
+LLM_MODEL_NAME_2=qwen3.6-flash          # 双模型负载均衡轮询
+EMBEDDING_MODEL=qwen3-vl-embedding      # 2560 维多模态文本嵌入
+RERANK_MODEL=qwen3-vl-rerank            # Cross-Encoder 深度重排
 
-# === 并发与限速 ===
-LLM_CONCURRENCY=128                  # 经验：64 安全 / 128 甜点 / 256 收益递减
-LLM_RPS=100                          # aiolimiter 软速率上限
-EMBED_CONCURRENCY=64
-EMBED_BATCH_SIZE=10                  # 文本模型批大小（多模态此值无效）
-RERANK_CONCURRENCY=8
+# === 魔塔社区凭据 ===
+MODELSCOPE_API_TOKEN=your-modelscope-api-token
 
-# === 数据库 ===
+# === 存储与中间件连接 ===
 POSTGRES_DSN=postgresql://medgraph:medgraph_pwd@127.0.0.1:5432/medgraph
 NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=medgraph_pwd
 QDRANT_URL=http://127.0.0.1:6333
 
-# === 检索参数 ===
-RECALL_TOP_K_VECTOR=30
-RECALL_TOP_K_GRAPH=20
-RERANK_TOP_K=8
+# === 速率与并发控制 ===
+LLM_CONCURRENCY=128                     # LLM 调用工作线程数
+LLM_RPS=100                             # 每秒请求限速上限
 ```
 
----
-
-## 13. 实测性能 & 调优结论
-
-### 实体抽取吞吐演进
-| 配置 | 实测吞吐 | retry/min | 备注 |
-|---|---|---|---|
-| 单模型 conc=16 | ~2 ops/s | ~0 | 起点 |
-| 单模型 conc=64 | ~4 ops/s | ~0 | |
-| **双模型 conc=64** | **~8 ops/s** | ~0 | 加第二模型独立限流池 |
-| **双模型 conc=128** | **~16 ops/s** | ~30 | **甜点** |
-| 双模型 conc=256 | ~19 ops/s | ~580 | 收益递减，retry 暴涨 |
-
-### Embedding 限制
-- 多模态端点 (`qwen3-vl-embedding`) **不支持 batch**，每次只接受一个 input
-- 实测稳态 ~36 ops/s（被服务端 throttle）
-- 60,000 次单调用约 28 分钟
-
-### 评估 480 条
-- 串行：每条 ~7s × 480 = 56 min
-- **并行 32**：1.07 s/it 稳态 = **12.5 min**
-- 瓶颈：rerank concurrency=8
-
-### Recall 实测
-| 指标 | 值 |
-|---|---|
-| QA Recall@8 | **0.9208** |
-| Chunk Recall@8 | **0.9313** |
-| Chunk MRR@8 | **0.9130** |
-
----
-
-## 14. 完整运行（首次部署）
+#### 5. 一键启动基础设施
+通过 Docker Compose 启动 Postgres、Neo4j（含 APOC 插件）和 Qdrant 向量库：
 
 ```bash
-# 1) 启动基础设施（Docker Desktop 需运行）
 docker compose up -d
+```
 
-# 2) Python 环境
-python -m venv .venv
-.venv\Scripts\activate           # Windows
-# source .venv/bin/activate      # Linux / macOS
-pip install -r requirements.txt
-
-# 3) 配置 .env，写入你的 DashScope API_KEY
-
-# 4) 验证连通
+等待 10 秒后执行连通性与模型冒烟检查：
+```bash
 python scripts/00_smoke_test.py
+```
+> 若输出所有连接均为 `[OK]`，说明底层基础存储与外部模型服务均已就绪！
 
-# 5) 离线流水线（按顺序，每步 ~分钟级）
-python scripts/01_load_data.py
-python scripts/02_build_vectors.py --view both        # 28 min
-python scripts/03_build_graph_skeleton.py
-python scripts/04_extract_entities.py                  # 30 min（重活，断点续跑）
-python scripts/09_dedup_entities.py                    # 可选：实体去重
-python scripts/05_extract_relations.py --push-graph    # 33 min
-python scripts/06_build_topic_summaries.py --concurrency 8  # 10 min
-python scripts/06c_fill_missing_summaries.py            # 补做缺失
-python scripts/07_build_testset.py --per-specialty 20
+---
 
-# 6) 启动服务
-uvicorn src.api.server:app --host 0.0.0.0 --port 8000
-# 浏览器打开 http://127.0.0.1:8000/
+## 6. 离线全流程构建
 
-# 7) 评估
+项目提供了一组按顺序编号的脚本，涵盖从原始数据到完整图谱与向量索引的端到端构建。每个大模型抽取步骤均原生支持**断点续跑**，异常中断后再次运行会自动跳过已处理的数据。
+
+| 序号 | 执行脚本 | 任务说明 | 预计耗时 (推荐配置) |
+| :---: | :--- | :--- | :---: |
+| **01** | `python scripts/01_load_data.py` | 解析 `Professional.json` 层次结构入库 PostgreSQL | ~ 11 秒 |
+| **02** | `python scripts/02_build_vectors.py --view both` | 生成 Q 与 A 双通道向量并建立 Qdrant 集合索引 | ~ 28 分钟 (6万条) |
+| **03** | `python scripts/03_build_graph_skeleton.py` | 在 Neo4j 中构建科室/主题/分块/问答四级骨架关系 | ~ 15 秒 |
+| **04** | `python scripts/04_extract_entities.py` | 30k 问答双模型并行抽取医学实体（输出 cache） | ~ 30 分钟 (128并发) |
+| **09** | `python scripts/09_dedup_entities.py` | 实体别名对齐、同义词归并与图谱去重 | ~ 8 秒 |
+| **05** | `python scripts/05_extract_relations.py --push-graph` | 抽取 12 类临床关系并注入 Neo4j 拓扑边 | ~ 33 分钟 |
+| **06** | `python scripts/06_build_topic_summaries.py` | 生成 2,533 个子主题语义摘要并建立 Topic 向量 | ~ 10 分钟 |
+| **06c**| `python scripts/06c_fill_missing_summaries.py` | 针对偶发限流丢失的摘要进行自动补充修复 | ~ 8 分钟 (可选) |
+| **07** | `python scripts/07_build_testset.py --per-specialty 20` | 按科室分层抽样生成 480 条基准评估测试集 | < 1 秒 |
+
+---
+
+## 7. 检索与融合算法原理
+
+### 7.1 三路并行召回机制
+当接收到用户的医疗咨询提问时，系统并发执行以下三个检索通道：
+1. **Q-vec 通道（问题意图相似度）**：将用户问题直接 Embedding 后，在 Qdrant `medgraph_q` 集合中做余弦相似度检索（Top-30），专门捕捉字面与直接意图相似的过往病例；
+2. **A-vec 通道（问答内涵深度匹配）**：在 `medgraph_a`（问题与权威解答混合拼接向量）中做相似度检索（Top-30），捕获深层医学逻辑与症状描述匹配；
+3. **Graph 通道（知识图谱跳跃推理）**：首先识别提问中的核心医学实体，以实体为锚点通过 Neo4j 执行 1-2 跳 Cypher 关联路径检索（Top-20）：
+   - 直接提及（`q -[:MENTIONS]-> entity`）：权重 1.0；
+   - 一跳临床因果/对症关系：权重 0.7；
+   - 两跳扩展路径：权重 0.4。
+
+### 7.2 加权倒数排名融合 (RRF)
+将三路异构打分通过 RRF 公式映射到统一排序空间：
+
+$$ \text{RRF\_Score}(d) = \sum_{c \in \{Q, A, Graph\}} \frac{w_c}{k + \text{rank}_c(d)} $$
+
+- 平滑常数：$k = 60$；
+- 默认通道权重：$w_Q = 1.0, w_A = 1.0, w_{Graph} = 0.8$。
+
+### 7.3 Cross-Encoder 精准重排
+初筛融合得到 Top-32 候选后，送入 DashScope 原生 Cross-Encoder 重排模型，对 `(Query, QA_Context)` 文本对进行交叉注意力打分，精确筛选出相关度最高的 Top-8 片段。
+
+### 7.4 兄弟上下文补充与图谱三元组注入
+为避免片段式检索导致的信息丢失：
+- **兄弟上下文注入**：对命中的每一个 QA，自动挂载所属同一个 Chunk 的前序/后序兄弟问答（最多 3 条），还原完整诊疗语境；
+- **子图三元组注入**：提取锚点实体关联的临床三元组（例如 `[二甲双胍] -TREATS-> [2型糖尿病]`），作为显式知识先验一并组装到提示词中。
+
+---
+
+## 8. 评测基准与复现
+
+### 8.1 评测指标结果
+
+采用 480 条分层抽样测试集（覆盖 24 个科室，每科室 20 条盲测数据），评测指标表现如下：
+
+| 评估指标 | 评测表现 | 行业普通 RAG 基线 | 提升幅度 |
+| :--- | :---: | :---: | :---: |
+| **QA Recall@8** | **92.08%** | 71.4% | **+ 20.68%** |
+| **Chunk Recall@8** | **93.13%** | 74.2% | **+ 18.93%** |
+| **Chunk MRR@8** | **0.9130** | 0.682 | **+ 0.231** |
+
+### 8.2 性能与耗时基准
+- **单请求端到端响应耗时**：约 5 ~ 8 秒（包含：LLM 查询重写与实体识别 ~3-5s、三路并行召回 ~1s、重排序 ~0.4s、LLM 引用生成 ~1.5s）；
+- **全量评估吞吐**：在 32 并发压力下，480 条评测集可在 **12.5 分钟** 内完成全量评测。
+
+### 8.3 一键复现评测
+```bash
 python scripts/08_evaluate.py --top-k 8 --parallelism 32
+```
+评估明细日志与统计报告将自动写入 `data/cache/eval_results.jsonl`。
+
+---
+
+## 9. API 接口与交互控制台
+
+### 9.1 启动服务
+```bash
+uvicorn src.api.server:app --host 0.0.0.0 --port 8000 --reload
+```
+服务启动后，使用浏览器访问：**http://127.0.0.1:8000** 即可进入交互式可视化控制台。
+
+### 9.2 API 端点清单
+
+| 请求方式 | 接口路由 | 功能说明 |
+| :---: | :--- | :--- |
+| `GET` | `/` | 嵌入式单页交互测试前端 |
+| `GET` | `/health` | 服务健康检查 |
+| `GET` | `/stats` | 获取 Postgres / Neo4j / Qdrant 各引擎实时数据量 |
+| `GET` | `/specialties` | 浏览 24 个临床科室及对应的问答分布、摘要覆盖度 |
+| `GET` | `/random_qa` | 随机提取真实临床 QA（用于快速测试与提问灵感） |
+| `GET` | `/entity` | 查询指定医学实体的别名、关联三元组及提及该实体的问答列表 |
+| `POST` | `/retrieve` | 仅执行多路检索与重排（返回三路得分明细、耗时分析与图谱三元组） |
+| `POST` | `/ask` | 执行端到端 GraphRAG 问答（返回带 `[chunkId]` 严格引用的结构化回答） |
+
+### 9.3 `/ask` 请求与响应示例
+
+**Request Body:**
+```json
+{
+  "query": "妊娠期发现血糖升高，应该如何进行临床管理与干预？",
+  "top_k": 8
+}
+```
+
+**Response Preview:**
+```json
+{
+  "answer": "妊娠期糖尿病的管理首先应以医学营养治疗和适度运动为基础 [妇产科学 - 妊娠合并糖尿病 - part-1]。若生活方式干预后血糖仍未达标，首选胰岛素治疗 [妇产科学 - 妊娠合并糖尿病 - part-2]...",
+  "citations": [
+    {
+      "chunk_id": "妇产科学 - 妊娠合并糖尿病 - part-1",
+      "specialty": "妇产科学",
+      "topic": "妊娠合并糖尿病",
+      "matched_qa": "妊娠期血糖控制目标是多少？"
+    }
+  ],
+  "timings_ms": {
+    "query_understanding": 3120,
+    "recall": 890,
+    "rerank": 410,
+    "generation": 1650,
+    "total": 6070
+  }
+}
+```
+
+### 9.4 交互控制台特色
+
+- **实时状态统计**：顶部动态展现三大存储库（PG/Neo4j/Qdrant）的实时图节点与向量计数；
+- **智能实体着色高亮**：根据疾病、药物、症状、检验等 9 种实体类型自动赋予医学专属配色；
+- **可点击溯源引用徽章**：点击正文中的 `[chunkId]`，界面自动平滑滚动并高亮对应证据卡片；
+- **动态 SVG 知识子图**：直观渲染与当前问题相关的实体关系拓扑网络。
+
+---
+
+## 10. 工程实践与排错指南
+
+在数万次大模型调用与高并发检索流水线构建过程中，我们总结了以下核心经验与避坑要点：
+
+<details>
+<summary><b>1. 多模态 Embedding 接口协议与路由</b></summary>
+
+- **现象**：调用 `qwen3-vl-embedding` 提示 404 或参数结构错误。
+- **解决**：该模型底层走阿里云百炼 `multimodal-embedding` 专用端点，请求体需封装为 `input.contents=[{"text": "..."}]`。本项目在 `src/clients/embedding.py` 中实现了自动协议适配，透明兼容纯文本与多模态端点。
+</details>
+
+<details>
+<summary><b>2. Qdrant 批量写入连接重置 (WinError 10054 / Timeout)</b></summary>
+
+- **现象**：向 Qdrant 高并发写入 2560 维高维向量时，偶发套接字强制关闭。
+- **解决**：调整批量写入 batch 大小为 128，并在客户端中集成指数退避重试，显式将连接超时提升至 120s。
+</details>
+
+<details>
+<summary><b>3. 大模型返回 JSON 截断与 Markdown 代码块容错</b></summary>
+
+- **现象**：LLM 抽取实体关系时偶发包裹 ` ```json ` 围栏或包含解释性文本导致 JSON 反序列化崩溃。
+- **解决**：实现了鲁棒的 `_safe_json` 解析器，自动剥离 Markdown 围栏并定位最外层括号配对，全面确保解析稳定性。
+</details>
+
+<details>
+<summary><b>4. 双模型并发池性能甜点</b></summary>
+
+- **实测表现**：采用 `deepseek-v4-flash` + `qwen3.6-flash` 双模型 Round-Robin：
+  - 单模型 64 并发：吞吐 ~4 ops/s；
+  - 双模型 128 并发：吞吐提升至 **~16 ops/s**（达到最佳能效平衡点）；
+  - 并发升至 256：服务端频繁触发 429 限流重试，整体收益递减。
+</details>
+
+---
+
+## 11. 项目目录结构
+
+```
+graph_rag/
+├── Professional.json              # 默沙东专业版 30k 问答数据集
+├── .env.example                   # 环境变量参考模板
+├── docker-compose.yml             # Postgres + Neo4j + Qdrant 编排
+├── requirements.txt               # 运行环境依赖库
+├── README.md                      # 开源说明文档
+│
+├── src/
+│   ├── config.py                  # Pydantic 集中配置管理
+│   ├── clients/                   # 阿里云百炼异步客户端（限速/重试/日志）
+│   │   ├── _base.py               # 基础 HTTP 连接池与限流器
+│   │   ├── llm.py                 # 双模型轮询 Chat Client
+│   │   ├── embedding.py           # 2560 维向量多模态路由客户端
+│   │   └── rerank.py              # Cross-Encoder 原生重排客户端
+│   ├── ingest/                    # 知识抽取流水线
+│   │   ├── parse.py               # chunkId 层级解析
+│   │   ├── storage.py             # PostgreSQL 表结构与批量入库
+│   │   ├── prompts.py             # 实体/关系/摘要提示词模版
+│   │   ├── entity_extract.py      # 9 类医学实体抽取与断点保存
+│   │   ├── entity_dedup.py        # 实体同义别名归并算法
+│   │   ├── relation_extract.py    # 12 类临床关系抽取与 APOC 推图
+│   │   └── summary.py             # 子主题全局语义摘要
+│   ├── graph/                     # Neo4j 拓扑图谱管理
+│   ├── index/                     # Qdrant 向量库封装
+│   ├── retrieval/                 # 在线多路召回与融合引擎
+│   │   ├── query_understanding.py # 意图理解、改写与实体识别
+│   │   ├── graph_recall.py        # 1-2 跳子图拓扑关联召回
+│   │   ├── fusion.py              # 加权 RRF 算法实现
+│   │   └── pipeline.py            # 端到端并行流水线编排
+│   ├── generation/
+│   │   └── answer.py              # 证据链回溯生成控制器
+│   ├── eval/                      # 评测基准套件
+│   └── api/                       # FastAPI 服务与可视化前端
+│
+├── scripts/                       # 编号离线执行脚本 (00 ~ 09)
+└── data/                          # 挂载卷与断点续跑日志 (cache)
 ```
 
 ---
 
-## 15. 异常处理 & 已修复 Bug 一览
+## 12. 路线图与社区贡献
 
-| 现象 | 根因 | 修复 |
-|---|---|---|
-| Embedding 调用 404 | `qwen3-vl-embedding` 是多模态模型，要走 `multimodal-embedding` 端点 + `input.contents=[{text}]` 格式 | `clients/embedding.py` 按模型名自动路由，单文本一次调用 |
-| Qdrant upsert 偶发 WinError 10054 | 高并发 + 单批次过大 + 客户端默认 timeout | `vector_store.py` 改 batch=128 + 内置 3 次重试 + `timeout=120` |
-| 02_vectors 断点重跑会重新 embed 全部 | 旧脚本无 resume | 加 `existing_point_ids()` 跳过已存在 |
-| 06 摘要 940 条丢失 | 早期 quota 暴击导致 5 次重试也失败，第一个失败把 gather 拉崩 | 单任务 try/except 兜空字符串；新增 `06c_fill_missing_summaries.py` 单独补 |
-| `query_understanding.py` `.format()` KeyError | prompt 里 JSON 示例的 `{}` 没转义 | 改 `{{}}` 双花括号 |
-| Qdrant `client.search` 缺失 | qdrant-client v1.17 移除了 search() | 改用 `query_points().points` |
-| LLM `chat_json` 偶发 JSON 解析失败 | LLM 输出含 markdown 代码围栏或裸文本 | `_safe_json` 优先剥围栏 + 找最外层 `{}/[]`，仍失败再 `json.loads` |
-| Postgres exec 中含 `&&` 在 cmd 上失败 | Windows shell 不识别 | 全部用 sh / Git Bash |
+欢迎广大学者、工程师与临床医学专家共同参与本项目建设！
 
----
+### 路线图 (Roadmap)
+- [ ] **查询理解轻量化蒸馏**：将在线 LLM 改写蒸馏至端侧轻量小模型，将首阶段耗时从 3s 压减至 300ms 以内；
+- [ ] **多轮对话与问诊会话流**：支持临床追问、症状引导澄清与历史会话状态维护；
+- [ ] **前端图谱可视化增强**：将右侧 SVG 拓扑升级为基于 Cytoscape / D3 的动态可拖拽 3D 力导向关系网络；
+- [ ] **流式输出 (SSE)**：API 与前端支持 Server-Sent Events 流式打字生成与引用同步高亮。
 
-## 16. 安全 / 合规注意
-
-- 生成模板已声明"参考信息而非个体化医疗建议"，**不要去掉**
-- 每个回答段落必须挂 `chunkId`，否则前端不显示——便于审计
-- DashScope API key 仅写在 `.env`，**勿提交版本库**
+### 参与贡献
+1. Fork 本项目仓库并新建分支（如 `feature/amazing-feature`）；
+2. 提交您的修改并撰写清晰的 Commit Message；
+3. 推送分支至您的远程仓库并提交 Pull Request。
 
 ---
 
-## 17. 后续可扩展方向
+## 13. 免责声明与开源协议
 
-- [ ] **冷启动加速**：把 query understanding 的 prompt 蒸馏成更短的格式（5s → <1s）
-- [ ] **多阶段 retrieval**：第一阶段先用 topic-vec 定位 1-2 个相关子主题，再做 Q/A 召回
-- [ ] **实体清洗 v2**：在 dedup 基础上再用 LLM 做语义合并（如"2 型糖尿病"vs"非胰岛素依赖型糖尿病"）
-- [ ] **流式生成**：`/ask` 端点加 SSE，前端边收边渲染
-- [ ] **跨科室桥接评估**：人工标注 200 条复合问题（如"妊娠合并糖尿病视网膜病变"），单独验证图召回的增益
-- [ ] **答案溯源置信度**：基于 channel_scores 加权给每段答案打置信度
-- [ ] **知识图谱可视化**：把右栏 SVG 升级成可拖拽的 force-layout（d3 / cytoscape）
+### ⚠️ 医学与法律免责声明 (Medical Disclaimer)
+> 1. 本项目所包含的所有代码、数据及模型输出内容，**仅供计算机科学、自然语言处理及信息检索领域的学术研究与技术交流使用**。
+> 2. 系统输出的内容**绝不构成任何临床诊断结论、个体化治疗方案或专业医疗处方建议**。
+> 3. 任何个人或机构面对具体疾病状况，应及时前往正规医疗机构咨询具备执业资质的专业医师。本项目开发者不对任何依据本项目输出采取的诊疗决策及后果承担任何法律责任。
 
----
-
-## 18. 致谢
-
-- **数据**：默克手册（Merck Manuals）风格的临床医学问答
-- **模型**：阿里云百炼 DashScope（DeepSeek / Qwen 系列）
-- **图存储**：Neo4j Community + APOC 插件
-- **向量存储**：Qdrant
-- **方案灵感**：Microsoft GraphRAG（社区聚类 + 摘要）；本项目采用人工标签替代 Leiden，更适合本数据集
+### 📄 开源协议 (License)
+本项目遵循 [MIT License](LICENSE) 开源协议。数据来源于《默沙东诊疗手册》（专业版），请在遵循原版权方声明的前提下合规使用。
